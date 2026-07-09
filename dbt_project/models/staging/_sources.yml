@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    description: "Raw API payloads loaded by the Python ingestion step."
+    tables:
+      - name: departures
+        description: "One row per departure as returned by the transport.rest API."

@@ -1,0 +1,24 @@
+name: "project_on_rails"
+version: "0.1.0"
+config-version: 2
+
+profile: "project_on_rails"
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  project_on_rails:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table
