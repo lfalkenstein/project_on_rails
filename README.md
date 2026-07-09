@@ -17,19 +17,55 @@ pip install -e ".[dev]"
 copy .env.example .env
 ```
 
-## Run the pipeline
+## What gets collected (`ingest_config.yml`)
+This single file controls **which stations** and **which API**:
+```yaml
+api: bvg          # "db" (Deutsche Bahn) or "bvg" (Berlin)
+duration: 60      # look-ahead window in minutes
+stations:
+  - search: "Alexanderplatz"
+  - search: "Berlin Hauptbahnhof"
+```
+Preview how a name resolves before adding it:
 ```powershell
-# 1. Ingest: fetch departures into DuckDB
-python -m ingest --station "Berlin Hbf" --duration 60
-
-# 2. Transform: build staging + marts models
-dbt run --project-dir dbt_project --profiles-dir dbt_project
-
-# 3. Explore
-python -c "import duckdb; print(duckdb.connect('data/warehouse.duckdb').sql('select * from main.fct_delays_by_line limit 10'))"
+python -m ingest --find "Ostkreuz"
 ```
 
-Switch APIs by setting `TRANSPORT_API=bvg` in `.env`.
+## Run the pipeline
+```powershell
+# Full cycle (ingest all configured stations, then build dbt models):
+powershell -ExecutionPolicy Bypass -File scripts\run_pipeline.ps1
+
+# Or step by step:
+python -m ingest                 # collect every station in ingest_config.yml
+python -m ingest --api db        # override the API for one run
+python -m ingest --station "Berlin Hbf"   # one-off single station
+dbt run --project-dir dbt_project --profiles-dir dbt_project
+
+# Explore
+python query.py "select * from main.fct_delays_by_line limit 10"
+```
+
+> Note: DuckDB is single-writer across processes. Disconnect any DBeaver /
+> notebook connection to `data/warehouse.duckdb` before running an ingest.
+
+## Scheduling (WHEN it runs)
+The pipeline only runs when triggered. To collect data continuously, register
+a Windows Scheduled Task that calls the wrapper script on a timer.
+
+Example: run every 15 minutes (adjust the path/interval as needed):
+```powershell
+schtasks /Create /TN "project_on_rails ingest" /SC MINUTE /MO 15 ^
+  /TR "powershell -ExecutionPolicy Bypass -File \"%CD%\scripts\run_pipeline.ps1\"" ^
+  /F
+```
+Manage it with:
+```powershell
+schtasks /Run    /TN "project_on_rails ingest"   # run once now
+schtasks /Query  /TN "project_on_rails ingest"   # check status / next run
+schtasks /Delete /TN "project_on_rails ingest" /F
+```
+On macOS/Linux the equivalent is a cron entry calling the same commands.
 
 ## Layout
 ```

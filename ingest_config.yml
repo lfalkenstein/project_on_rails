@@ -1,0 +1,18 @@
+# Ingestion config. Edit this file to control WHAT gets collected.
+# (WHEN it runs is controlled by the scheduler - see README "Scheduling".)
+
+# Which upstream API to use for all stations below.
+#   "db"  -> Deutsche Bahn  (https://v6.db.transport.rest)
+#   "bvg" -> Berlin BVG     (https://v6.bvg.transport.rest)
+# Can be overridden per-run with:  python -m ingest --api bvg
+api: bvg
+
+# How far ahead to look, in minutes, for each station.
+duration: 60
+
+# Stations to collect on every run. `search` is matched against the API's
+# location search and the first hit is used, so a clear name works best.
+# Tip: run `python -m ingest --find "<name>"` to preview what a search resolves to.
+stations:
+  - search: "Alexanderplatz"
+  - search: "Berlin Hauptbahnhof"
