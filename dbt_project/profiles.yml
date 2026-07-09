@@ -1,10 +1,11 @@
 # dbt profile for DuckDB.
-# The path is relative to where you run `dbt`, so run dbt from the repo root:
+# dbt-duckdb resolves this path relative to the CURRENT WORKING DIRECTORY,
+# so always run dbt from the repo root:
 #   dbt run --project-dir dbt_project --profiles-dir dbt_project
 project_on_rails:
   target: dev
   outputs:
     dev:
       type: duckdb
-      path: ../data/warehouse.duckdb
+      path: data/warehouse.duckdb
       threads: 4
