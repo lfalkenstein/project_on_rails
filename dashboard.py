@@ -29,7 +29,7 @@ def load_fct() -> pd.DataFrame:
             """
             select
                 line_name,
-                line_mode,
+                line_product,
                 planned_hour,
                 num_departures,
                 avg_delay_minutes,
@@ -66,13 +66,13 @@ if df.empty:
 
 # ---- Sidebar filters -------------------------------------------------------
 st.sidebar.header("Filters")
-modes = sorted(df["line_mode"].dropna().unique())
-sel_modes = st.sidebar.multiselect("Mode", modes, default=modes)
+products = sorted(df["line_product"].dropna().unique())
+sel_products = st.sidebar.multiselect("Type", products, default=products)
 
-lines = sorted(df.loc[df["line_mode"].isin(sel_modes), "line_name"].dropna().unique())
+lines = sorted(df.loc[df["line_product"].isin(sel_products), "line_name"].dropna().unique())
 sel_lines = st.sidebar.multiselect("Line", lines, default=lines)
 
-fdf = df[df["line_mode"].isin(sel_modes) & df["line_name"].isin(sel_lines)]
+fdf = df[df["line_product"].isin(sel_products) & df["line_name"].isin(sel_lines)]
 
 if fdf.empty:
     st.info("No rows match the current filters.")

@@ -5,7 +5,7 @@ with departures as (
 
 select
     line_name,
-    line_mode,
+    line_product,
     date_trunc('hour', planned_when) as planned_hour,
     count(*)                         as num_departures,
     avg(delay_minutes)               as avg_delay_minutes,

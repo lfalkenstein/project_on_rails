@@ -16,6 +16,9 @@ select
     trip_id,
     line_name,
     line_mode,
+    -- `mode` is coarse (all rail-based lines are "train"); `product` is the
+    -- granular type (tram, subway, suburban, bus...). Pull it from the raw JSON.
+    raw->'line'->>'product' as line_product,
     direction,
     planned_when,
     actual_when,
