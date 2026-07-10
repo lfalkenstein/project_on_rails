@@ -46,6 +46,27 @@ def load_fct() -> pd.DataFrame:
         ).df()
 
 
+@st.cache_data(ttl=60)
+def load_5min() -> pd.DataFrame:
+    """Load the 5-minute time-series mart (read-only, cached 60s)."""
+    with duckdb.connect(str(DB_PATH), read_only=True) as con:
+        return con.sql(
+            """
+            select
+                bucket_5min,
+                station_name,
+                line_name,
+                line_product,
+                daypart,
+                num_departures,
+                num_settled,
+                avg_delay_minutes
+            from main.fct_departures_5min
+            order by bucket_5min
+            """
+        ).df()
+
+
 st.title("🚆 project_on_rails — delays by line")
 
 if not DB_PATH.exists():
@@ -111,7 +132,10 @@ c3.metric("Late > 5 min", f"{late} ({late_pct:.0f}%)")
 st.subheader("Average delay by line")
 by_line = (
     fdf.groupby("line_name")
-    .apply(lambda g: (g["avg_delay_minutes"] * g["num_departures"]).sum() / g["num_departures"].sum())
+    .apply(
+        lambda g: (g["avg_delay_minutes"] * g["num_departures"]).sum() / g["num_departures"].sum(),
+        include_groups=False,
+    )
     .sort_values(ascending=False)
     .rename("avg_delay_minutes")
 )
@@ -120,7 +144,10 @@ st.bar_chart(by_line)
 st.subheader("Average delay by daypart")
 by_daypart = (
     fdf.groupby("daypart")
-    .apply(lambda g: (g["avg_delay_minutes"] * g["num_departures"]).sum() / g["num_departures"].sum())
+    .apply(
+        lambda g: (g["avg_delay_minutes"] * g["num_departures"]).sum() / g["num_departures"].sum(),
+        include_groups=False,
+    )
     .rename("avg_delay_minutes")
     .reindex([d for d in DAYPART_ORDER if d in fdf["daypart"].unique()])
 )
@@ -129,7 +156,10 @@ st.bar_chart(by_daypart)
 st.subheader("Average delay over time (by hour)")
 by_hour = (
     fdf.groupby("planned_hour")
-    .apply(lambda g: (g["avg_delay_minutes"] * g["num_departures"]).sum() / g["num_departures"].sum())
+    .apply(
+        lambda g: (g["avg_delay_minutes"] * g["num_departures"]).sum() / g["num_departures"].sum(),
+        include_groups=False,
+    )
     .rename("avg_delay_minutes")
 )
 st.line_chart(by_hour)
@@ -137,6 +167,70 @@ st.line_chart(by_hour)
 st.subheader("Departure volume by hour")
 vol = fdf.groupby("planned_hour")["num_departures"].sum()
 st.bar_chart(vol)
+
+# ---- Fine-grained time series (5-min buckets + rolling windows) ------------
+st.header("Fine-grained trends (5-min buckets)")
+
+try:
+    fine = load_5min()
+except duckdb.IOException:
+    fine = pd.DataFrame()
+
+# reuse the same filters as above
+fine = fine[
+    fine["station_name"].isin(sel_stations)
+    & fine["line_product"].isin(sel_products)
+    & fine["line_name"].isin(sel_lines)
+    & fine["daypart"].isin(sel_dayparts)
+]
+
+if fine.empty:
+    st.info("No fine-grained data for the current filters yet.")
+else:
+    fine = fine.copy()
+    fine["bucket_5min"] = pd.to_datetime(fine["bucket_5min"])
+
+    # ---- Volume at 5-min granularity, with optional smoothing ----
+    st.subheader("Departure volume (5-min buckets)")
+    vol_hours = st.slider(
+        "Rolling smoothing window (hours) — 0 = raw 5-min buckets",
+        min_value=0.0, max_value=24.0, value=1.0, step=0.5, key="vol_win",
+    )
+    vol5 = (
+        fine.groupby("bucket_5min")["num_departures"].sum().sort_index()
+        .asfreq("5min", fill_value=0)  # continuous timeline; gaps = 0 departures
+    )
+    vol_out = pd.DataFrame({"volume (5-min)": vol5})
+    if vol_hours > 0:
+        win = max(1, int(vol_hours * 12))  # 12 buckets per hour
+        vol_out[f"rolling {vol_hours:g}h"] = vol5.rolling(win, min_periods=1).mean()
+    st.line_chart(vol_out)
+
+    # ---- Delay trend with a larger rolling window ----
+    st.subheader("Delay trend (settled only, rolling)")
+    delay_hours = st.slider(
+        "Rolling window (hours)",
+        min_value=0.5, max_value=168.0, value=6.0, step=0.5, key="delay_win",
+    )
+
+    def _wavg_delay(g: pd.DataFrame) -> float:
+        w = g["num_settled"].sum()
+        if not w:
+            return float("nan")
+        return (g["avg_delay_minutes"].fillna(0) * g["num_settled"]).sum() / w
+
+    delay5 = (
+        fine.groupby("bucket_5min").apply(_wavg_delay, include_groups=False).sort_index()
+        .asfreq("5min")  # NaN where no settled departures
+    )
+    win = max(1, int(delay_hours * 12))
+    delay_out = pd.DataFrame(
+        {
+            "delay (5-min)": delay5,
+            f"rolling {delay_hours:g}h": delay5.rolling(win, min_periods=1).mean(),
+        }
+    )
+    st.line_chart(delay_out)
 
 # ---- Raw table -------------------------------------------------------------
 with st.expander("Show underlying data"):
