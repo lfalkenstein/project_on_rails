@@ -17,3 +17,4 @@ duration: 30
 # Tip: run `python -m ingest --find "<name>"` to preview what a search resolves to.
 stations:
   - search: "Behaimstr."
+  - search: "S+U Alexanderplatz"

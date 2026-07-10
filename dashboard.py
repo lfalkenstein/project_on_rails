@@ -28,6 +28,7 @@ def load_fct() -> pd.DataFrame:
         return con.sql(
             """
             select
+                station_name,
                 line_name,
                 line_product,
                 planned_hour,
@@ -36,7 +37,7 @@ def load_fct() -> pd.DataFrame:
                 max_delay_minutes,
                 num_late_over_5min
             from main.fct_delays_by_line
-            order by planned_hour, line_name
+            order by station_name, planned_hour, line_name
             """
         ).df()
 
@@ -66,13 +67,18 @@ if df.empty:
 
 # ---- Sidebar filters -------------------------------------------------------
 st.sidebar.header("Filters")
-products = sorted(df["line_product"].dropna().unique())
+stations = sorted(df["station_name"].dropna().unique())
+sel_stations = st.sidebar.multiselect("Station", stations, default=stations)
+
+sdf = df[df["station_name"].isin(sel_stations)]
+
+products = sorted(sdf["line_product"].dropna().unique())
 sel_products = st.sidebar.multiselect("Type", products, default=products)
 
-lines = sorted(df.loc[df["line_product"].isin(sel_products), "line_name"].dropna().unique())
+lines = sorted(sdf.loc[sdf["line_product"].isin(sel_products), "line_name"].dropna().unique())
 sel_lines = st.sidebar.multiselect("Line", lines, default=lines)
 
-fdf = df[df["line_product"].isin(sel_products) & df["line_name"].isin(sel_lines)]
+fdf = sdf[sdf["line_product"].isin(sel_products) & sdf["line_name"].isin(sel_lines)]
 
 if fdf.empty:
     st.info("No rows match the current filters.")
