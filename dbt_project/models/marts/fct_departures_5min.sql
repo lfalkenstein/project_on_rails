@@ -15,11 +15,12 @@ select
     station_id,
     station_name,
     line_name,
+    line_dir,
     line_product,
     daypart,
     count(*)                                         as num_departures,
     count(*) filter (where is_settled)               as num_settled,
     avg(delay_minutes) filter (where is_settled)     as avg_delay_minutes
 from departures
-group by 1, 2, 3, 4, 5, 6
+group by 1, 2, 3, 4, 5, 6, 7
 order by bucket_5min, station_name, line_name

@@ -33,6 +33,7 @@ def load_fct() -> pd.DataFrame:
             select
                 station_name,
                 line_name,
+                line_dir,
                 line_product,
                 planned_hour,
                 daypart,
@@ -56,6 +57,7 @@ def load_5min() -> pd.DataFrame:
                 bucket_5min,
                 station_name,
                 line_name,
+                line_dir,
                 line_product,
                 daypart,
                 num_departures,
@@ -100,15 +102,15 @@ sdf = df[df["station_name"].isin(sel_stations)]
 products = sorted(sdf["line_product"].dropna().unique())
 sel_products = st.sidebar.multiselect("Type", products, default=products)
 
-lines = sorted(sdf.loc[sdf["line_product"].isin(sel_products), "line_name"].dropna().unique())
-sel_lines = st.sidebar.multiselect("Line", lines, default=lines)
+lines = sorted(sdf.loc[sdf["line_product"].isin(sel_products), "line_dir"].dropna().unique())
+sel_lines = st.sidebar.multiselect("Line → destination", lines, default=lines)
 
 dayparts = [d for d in DAYPART_ORDER if d in sdf["daypart"].unique()]
 sel_dayparts = st.sidebar.multiselect("Daypart", dayparts, default=dayparts)
 
 fdf = sdf[
     sdf["line_product"].isin(sel_products)
-    & sdf["line_name"].isin(sel_lines)
+    & sdf["line_dir"].isin(sel_lines)
     & sdf["daypart"].isin(sel_dayparts)
 ]
 
@@ -129,9 +131,9 @@ c2.metric("Avg delay (min)", f"{avg_delay:.1f}")
 c3.metric("Late > 5 min", f"{late} ({late_pct:.0f}%)")
 
 # ---- Charts ----------------------------------------------------------------
-st.subheader("Average delay by line")
+st.subheader("Average delay by line → destination")
 by_line = (
-    fdf.groupby("line_name")
+    fdf.groupby("line_dir")
     .apply(
         lambda g: (g["avg_delay_minutes"] * g["num_departures"]).sum() / g["num_departures"].sum(),
         include_groups=False,
@@ -176,7 +178,7 @@ except duckdb.IOException:
 fine = fine[
     fine["station_name"].isin(sel_stations)
     & fine["line_product"].isin(sel_products)
-    & fine["line_name"].isin(sel_lines)
+    & fine["line_dir"].isin(sel_lines)
     & fine["daypart"].isin(sel_dayparts)
 ]
 

@@ -10,6 +10,7 @@ select
     station_id,
     station_name,
     line_name,
+    line_dir,
     line_product,
     date_trunc('hour', planned_when) as planned_hour,
     daypart,
@@ -23,5 +24,5 @@ from departures
 -- before they left. This removes the optimistic bias at the recent edge.
 where planned_when is not null
   and is_settled
-group by 1, 2, 3, 4, 5, 6
+group by 1, 2, 3, 4, 5, 6, 7
 order by station_name, planned_hour, line_name

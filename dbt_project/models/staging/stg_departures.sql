@@ -20,6 +20,9 @@ select
     -- granular type (tram, subway, suburban, bus...). Pull it from the raw JSON.
     raw->'line'->>'product' as line_product,
     direction,
+    -- a "line variant" = the line together with where it's heading. Delays can
+    -- differ per direction, so this is often the more useful unit than the line.
+    line_name || ' → ' || coalesce(direction, '?') as line_dir,
     planned_when,
     actual_when,
     -- delay comes back in seconds; expose minutes for convenience
