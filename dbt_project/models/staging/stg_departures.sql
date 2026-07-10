@@ -25,7 +25,19 @@ select
     -- delay comes back in seconds; expose minutes for convenience
     delay_seconds,
     round(delay_seconds / 60.0, 1) as delay_minutes,
-    platform
+    platform,
+    -- daypart classification (based on scheduled time). Rush only applies on
+    -- weekdays; weekends are their own bucket. Tweak the hour ranges here.
+    case
+        when isodow(planned_when) in (6, 7)          then 'weekend'
+        when hour(planned_when) between 7 and 9       then 'morning rush'
+        when hour(planned_when) between 16 and 18      then 'evening rush'
+        else 'off-peak'
+    end as daypart,
+    -- "settled" = we observed this departure at or after its scheduled time,
+    -- so the delay had a chance to become real (not an early optimistic
+    -- prediction). loaded_at and planned_when are both stored in local time.
+    (loaded_at >= planned_when) as is_settled
 from source
 -- natural key of a departure = the trip stopping at this station at this time.
 -- keep the most recently loaded observation for each.
