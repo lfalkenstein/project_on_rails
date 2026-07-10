@@ -18,6 +18,9 @@ import streamlit as st
 
 DB_PATH = Path(__file__).resolve().parent / "data" / "warehouse.duckdb"
 
+# Fixed display order for the daypart buckets defined in stg_departures.
+DAYPART_ORDER = ["morning rush", "off-peak", "evening rush", "weekend"]
+
 st.set_page_config(page_title="project_on_rails — delays", layout="wide")
 
 
@@ -32,6 +35,7 @@ def load_fct() -> pd.DataFrame:
                 line_name,
                 line_product,
                 planned_hour,
+                daypart,
                 num_departures,
                 avg_delay_minutes,
                 max_delay_minutes,
@@ -78,7 +82,14 @@ sel_products = st.sidebar.multiselect("Type", products, default=products)
 lines = sorted(sdf.loc[sdf["line_product"].isin(sel_products), "line_name"].dropna().unique())
 sel_lines = st.sidebar.multiselect("Line", lines, default=lines)
 
-fdf = sdf[sdf["line_product"].isin(sel_products) & sdf["line_name"].isin(sel_lines)]
+dayparts = [d for d in DAYPART_ORDER if d in sdf["daypart"].unique()]
+sel_dayparts = st.sidebar.multiselect("Daypart", dayparts, default=dayparts)
+
+fdf = sdf[
+    sdf["line_product"].isin(sel_products)
+    & sdf["line_name"].isin(sel_lines)
+    & sdf["daypart"].isin(sel_dayparts)
+]
 
 if fdf.empty:
     st.info("No rows match the current filters.")
@@ -105,6 +116,15 @@ by_line = (
     .rename("avg_delay_minutes")
 )
 st.bar_chart(by_line)
+
+st.subheader("Average delay by daypart")
+by_daypart = (
+    fdf.groupby("daypart")
+    .apply(lambda g: (g["avg_delay_minutes"] * g["num_departures"]).sum() / g["num_departures"].sum())
+    .rename("avg_delay_minutes")
+    .reindex([d for d in DAYPART_ORDER if d in fdf["daypart"].unique()])
+)
+st.bar_chart(by_daypart)
 
 st.subheader("Average delay over time (by hour)")
 by_hour = (
