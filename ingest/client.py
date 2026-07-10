@@ -37,8 +37,21 @@ class TransportClient:
         return resp.json()
 
     def search_stations(self, query: str, results: int = 5) -> list[dict[str, Any]]:
-        """Find stations by name. Returns a list of location objects."""
-        return self._get("/locations", query=query, results=results, stops=True)
+        """Find stations by name.
+
+        The /locations endpoint can also return addresses and POIs, which lack
+        the id/name we need. We ask for stops only and defensively filter to
+        entries that actually have both fields.
+        """
+        raw = self._get(
+            "/locations",
+            query=query,
+            results=results,
+            stops=True,
+            addresses=False,
+            poi=False,
+        )
+        return [loc for loc in raw if loc.get("id") and loc.get("name")]
 
     def departures(self, station_id: str, duration: int = 60) -> dict[str, Any]:
         """Departures for a station over the next `duration` minutes."""
