@@ -37,10 +37,16 @@ select
         when hour(planned_when) between 16 and 18      then 'evening rush'
         else 'off-peak'
     end as daypart,
-    -- "settled" = we observed this departure at or after its scheduled time,
-    -- so the delay had a chance to become real (not an early optimistic
-    -- prediction). loaded_at and planned_when are both stored in local time.
-    (loaded_at >= planned_when) as is_settled
+    -- "settled" = this departure's expected time is now in the past, so its
+    -- delay has had a chance to become real (not an early optimistic
+    -- prediction). We can't rely on observing a departure at/after it leaves:
+    -- trams drop out of the API feed right around departure, so the last
+    -- observation we keep is usually a few minutes BEFORE the scheduled time.
+    -- Instead we compare the expected departure (actual_when, falling back to
+    -- planned_when) against a data-freshness watermark = the latest loaded_at
+    -- across all observations. If our freshest data is already past this
+    -- departure's expected time, we consider it settled.
+    (coalesce(actual_when, planned_when) <= max(loaded_at) over ()) as is_settled
 from source
 -- natural key of a departure = the trip stopping at this station at this time.
 -- keep the most recently loaded observation for each.
