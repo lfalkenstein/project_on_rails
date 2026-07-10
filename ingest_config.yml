@@ -8,11 +8,12 @@
 api: bvg
 
 # How far ahead to look, in minutes, for each station.
-duration: 60
+# 30 min pairs with a 5-min poll interval: each departure is observed ~6 times
+# as it approaches, and a single missed run can't create a gap.
+duration: 30
 
 # Stations to collect on every run. `search` is matched against the API's
 # location search and the first hit is used, so a clear name works best.
 # Tip: run `python -m ingest --find "<name>"` to preview what a search resolves to.
 stations:
-  - search: "Alexanderplatz"
-  - search: "Berlin Hauptbahnhof"
+  - search: "Behaimstr."
