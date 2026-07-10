@@ -31,7 +31,7 @@ def _run_station(client: TransportClient, search: str) -> None:
     station_id, station_name = station["id"], station["name"]
     payload = client.departures(station_id, duration=settings.duration)
     count = load_departures(station_id, station_name, payload)
-    print(f"  + {station_name} (id={station_id}): stored {count} departures")
+    print(f"  + {station_name} (id={station_id}): {count} new observation(s) stored")
 
 
 def main() -> None:
