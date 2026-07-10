@@ -164,11 +164,7 @@ by_hour = (
 )
 st.line_chart(by_hour)
 
-st.subheader("Departure volume by hour")
-vol = fdf.groupby("planned_hour")["num_departures"].sum()
-st.bar_chart(vol)
-
-# ---- Fine-grained time series (5-min buckets + rolling windows) ------------
+# ---- Fine-grained time series (5-min buckets) -----------------------------
 st.header("Fine-grained trends (5-min buckets)")
 
 try:
@@ -190,27 +186,18 @@ else:
     fine = fine.copy()
     fine["bucket_5min"] = pd.to_datetime(fine["bucket_5min"])
 
-    # ---- Volume at 5-min granularity, with optional smoothing ----
+    # ---- Volume: one bar per 5-min bucket (plain count) ----
     st.subheader("Departure volume (5-min buckets)")
-    vol_hours = st.slider(
-        "Rolling smoothing window (hours) — 0 = raw 5-min buckets",
-        min_value=0.0, max_value=24.0, value=1.0, step=0.5, key="vol_win",
-    )
-    vol5 = (
-        fine.groupby("bucket_5min")["num_departures"].sum().sort_index()
-        .asfreq("5min", fill_value=0)  # continuous timeline; gaps = 0 departures
-    )
-    vol_out = pd.DataFrame({"volume (5-min)": vol5})
-    if vol_hours > 0:
-        win = max(1, int(vol_hours * 12))  # 12 buckets per hour
-        vol_out[f"rolling {vol_hours:g}h"] = vol5.rolling(win, min_periods=1).mean()
-    st.line_chart(vol_out)
+    vol5 = fine.groupby("bucket_5min")["num_departures"].sum().sort_index()
+    st.bar_chart(vol5)
 
-    # ---- Delay trend with a larger rolling window ----
-    st.subheader("Delay trend (settled only, rolling)")
+    # ---- Delay trend: noisy per-bucket delay smoothed by a rolling average ----
+    # Per-5-min delay is very noisy (few departures per bucket), so we smooth it
+    # with a moving average. The slider sets how many hours the window covers.
+    st.subheader("Delay trend (settled only, rolling average)")
     delay_hours = st.slider(
-        "Rolling window (hours)",
-        min_value=0.5, max_value=168.0, value=6.0, step=0.5, key="delay_win",
+        "Smoothing window (hours)",
+        min_value=0.5, max_value=48.0, value=2.0, step=0.5, key="delay_win",
     )
 
     def _wavg_delay(g: pd.DataFrame) -> float:
@@ -223,11 +210,11 @@ else:
         fine.groupby("bucket_5min").apply(_wavg_delay, include_groups=False).sort_index()
         .asfreq("5min")  # NaN where no settled departures
     )
-    win = max(1, int(delay_hours * 12))
+    win = max(1, int(delay_hours * 12))  # 12 buckets per hour
     delay_out = pd.DataFrame(
         {
-            "delay (5-min)": delay5,
-            f"rolling {delay_hours:g}h": delay5.rolling(win, min_periods=1).mean(),
+            "delay per 5-min (raw)": delay5,
+            f"rolling avg ({delay_hours:g}h)": delay5.rolling(win, min_periods=1).mean(),
         }
     )
     st.line_chart(delay_out)
