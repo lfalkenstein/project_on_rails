@@ -50,21 +50,34 @@ python query.py "select * from main.fct_delays_by_line limit 10"
 > notebook connection to `data/warehouse.duckdb` before running an ingest.
 
 ## Scheduling (WHEN it runs)
-The pipeline only runs when triggered. To collect data continuously, register
-a Windows Scheduled Task that calls the wrapper script on a timer.
+The pipeline only runs when triggered. On Windows, continuous collection is
+driven by a **Scheduled Task** whose definition lives in the repo at
+[`scripts/ingest_task.xml`](scripts/ingest_task.xml) — that file is the single
+source of truth for the schedule (interval, triggers, battery/power behaviour).
+The task launches `scripts/run_ingest_hidden.vbs`, a thin wrapper that runs
+`scripts/run_ingest.ps1` with no visible console window.
 
-Example: run every 15 minutes (adjust the path/interval as needed):
+> The specifics (poll interval, triggers, etc.) intentionally live *only* in the
+> XML so the docs can't drift out of sync. To change the schedule, edit the XML
+> and re-register — don't hand-edit the task in the Task Scheduler GUI, or the
+> file and reality will diverge.
+
+Register (or update) the task from the XML:
 ```powershell
-schtasks /Create /TN "project_on_rails ingest" /SC MINUTE /MO 15 ^
-  /TR "powershell -ExecutionPolicy Bypass -File \"%CD%\scripts\run_pipeline.ps1\"" ^
-  /F
+schtasks /Create /TN "project_on_rails ingest" /XML scripts\ingest_task.xml /F
 ```
-Manage it with:
+Manage it:
 ```powershell
 schtasks /Run    /TN "project_on_rails ingest"   # run once now
-schtasks /Query  /TN "project_on_rails ingest"   # check status / next run
+schtasks /Query  /TN "project_on_rails ingest" /V   # status / next run / triggers
 schtasks /Delete /TN "project_on_rails ingest" /F
 ```
+Note: the task runs `run_ingest.ps1` (ingest only) — dbt is **not** in this
+loop, so rebuild models separately with `dbt run` (or run the full
+`scripts/run_pipeline.ps1` by hand). The task runs under an interactive logon,
+so it collects while you're logged in and resumes automatically after a reboot
+once you log back in; it does not run while fully logged out.
+
 On macOS/Linux the equivalent is a cron entry calling the same commands.
 
 ## Layout
