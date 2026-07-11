@@ -215,7 +215,14 @@ line_chart = (
     .mark_bar(cornerRadiusEnd=3)
     .encode(
         x=alt.X("avg_delay_minutes:Q", title="avg delay (min)"),
-        y=alt.Y("line_dir:N", sort="-x", title=None),
+        y=alt.Y(
+            "line_dir:N",
+            sort="-x",
+            title=None,
+            # show every line label (Altair hides overlapping ones by default)
+            # and don't truncate the long "line → destination" text
+            axis=alt.Axis(labelOverlap=False, labelLimit=320),
+        ),
         color=_delay_color,
         tooltip=[
             alt.Tooltip("line_dir:N", title="Line"),
