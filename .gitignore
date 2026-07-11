@@ -14,11 +14,16 @@ venv/
 data/*.duckdb
 data/*.duckdb.wal
 data/raw/
+data/station_cache.json
 
 # dbt
 dbt_project/target/
 dbt_project/dbt_packages/
 dbt_project/logs/
+dbt_project/.user.yml
+
+# Logs
+logs/
 
 # Jupyter
 .ipynb_checkpoints/

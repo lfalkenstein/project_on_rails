@@ -1,12 +1,16 @@
 """Load raw API responses into DuckDB.
 
-We keep the ingestion dead simple: fetch departures, flatten a few useful
-fields, and append them to a `raw.departures` table. dbt does the rest.
+raw.departures is an append-only history, but we avoid storing exact repeats:
+each row carries a `content_hash` of its departure payload, and we only insert
+observations whose hash isn't already present. So if a departure is fetched
+again unchanged it's skipped, but if any field changed (e.g. the delay updated)
+the new observation is kept. dbt does the final per-departure dedup.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 from typing import Any
 
@@ -37,10 +41,13 @@ def _ensure_schema(con: duckdb.DuckDBPyConnection) -> None:
             actual_when      TIMESTAMP,
             delay_seconds    BIGINT,
             platform         VARCHAR,
-            raw              JSON
+            raw              JSON,
+            content_hash     VARCHAR
         );
         """
     )
+    # Migrate older tables created before content_hash existed.
+    con.execute("ALTER TABLE raw.departures ADD COLUMN IF NOT EXISTS content_hash VARCHAR;")
 
 
 def _parse_ts(value: str | None) -> dt.datetime | None:
@@ -50,12 +57,44 @@ def _parse_ts(value: str | None) -> dt.datetime | None:
     return dt.datetime.fromisoformat(value)
 
 
+# Fields that define a *meaningful* change for punctuality analysis. The hash
+# is built only from these, so volatile noise (live GPS position, occupancy,
+# free-text remarks) does NOT create a new "observation". The full payload is
+# still stored in the `raw` column. Widen this list if you later care about
+# more fields.
+SIGNATURE_FIELDS = (
+    "tripId",
+    "plannedWhen",
+    "when",
+    "delay",
+    "cancelled",
+    "platform",
+    "plannedPlatform",
+    "direction",
+)
+
+
+def _content_hash(station_id: str, d: dict[str, Any]) -> str:
+    """Stable fingerprint of one observation, built from the meaningful fields
+    only (see SIGNATURE_FIELDS). Re-fetching a departure whose schedule/delay
+    hasn't changed yields the same hash, so it is treated as a duplicate."""
+    line = d.get("line") or {}
+    signature = {f: d.get(f) for f in SIGNATURE_FIELDS}
+    signature["station_id"] = station_id
+    signature["line_name"] = line.get("name")
+    signature["line_mode"] = line.get("mode")
+    payload = json.dumps(signature, sort_keys=True, default=str)
+    return hashlib.md5(payload.encode("utf-8")).hexdigest()
+
+
 def load_departures(
     station_id: str,
     station_name: str,
     payload: dict[str, Any],
 ) -> int:
-    """Flatten a departures payload and append rows. Returns row count."""
+    """Flatten a departures payload and insert only new observations.
+
+    Returns the number of rows actually inserted (exact duplicates skipped)."""
     rows = payload.get("departures", payload) if isinstance(payload, dict) else payload
     if not isinstance(rows, list):
         rows = []
@@ -64,6 +103,7 @@ def load_departures(
     records = []
     for d in rows:
         line = d.get("line") or {}
+        raw_json = json.dumps(d)
         records.append(
             (
                 loaded_at,
@@ -78,18 +118,36 @@ def load_departures(
                 _parse_ts(d.get("when")),
                 d.get("delay"),
                 d.get("platform"),
-                json.dumps(d),
+                raw_json,
+                _content_hash(station_id, d),
             )
         )
 
+    if not records:
+        return 0
+
     with _connect() as con:
         _ensure_schema(con)
-        if records:
-            con.executemany(
-                """
-                INSERT INTO raw.departures VALUES
-                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                records,
-            )
-    return len(records)
+
+        # Stage the batch, then insert only rows whose content_hash is new.
+        con.execute("CREATE OR REPLACE TEMP TABLE _incoming AS SELECT * FROM raw.departures WHERE 1=0;")
+        con.executemany(
+            "INSERT INTO _incoming VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            records,
+        )
+
+        before = con.execute("SELECT count(*) FROM raw.departures").fetchone()[0]
+        con.execute(
+            """
+            INSERT INTO raw.departures
+            SELECT i.* FROM (
+                SELECT DISTINCT ON (content_hash) * FROM _incoming
+            ) i
+            WHERE NOT EXISTS (
+                SELECT 1 FROM raw.departures r WHERE r.content_hash = i.content_hash
+            );
+            """
+        )
+        after = con.execute("SELECT count(*) FROM raw.departures").fetchone()[0]
+
+    return after - before
