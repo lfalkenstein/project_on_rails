@@ -22,6 +22,17 @@ DB_PATH = Path(__file__).resolve().parent / "data" / "warehouse.duckdb"
 # Fixed display order for the daypart buckets defined in stg_departures.
 DAYPART_ORDER = ["morning rush", "off-peak", "evening rush", "weekend"]
 
+# Shared chart styling (kept tiny on purpose - no custom CSS / themes).
+CHART_HEIGHT = 280
+COLOR_ACCENT = "#4d8bff"   # neutral series (matches the app accent)
+COLOR_LATE = "#ff6b6b"     # delay > 0 (behind schedule)
+COLOR_EARLY = "#37c978"    # delay <= 0 (on time / early)
+
+# Colour a delay value red when late, green when on time/early.
+_delay_color = alt.condition(
+    "datum.avg_delay_minutes > 0", alt.value(COLOR_LATE), alt.value(COLOR_EARLY)
+)
+
 st.set_page_config(page_title="project_on_rails — delays", layout="wide")
 
 
@@ -84,7 +95,10 @@ def load_5min() -> pd.DataFrame:
         ).df()
 
 
-st.title("🚆 project_on_rails — delays by line")
+st.title("🚆 project_on_rails")
+st.markdown(
+    "#### Public-transport punctuality — delays by line & direction"
+)
 
 # ---- Freshness watermark ---------------------------------------------------
 # Show how current the DATA IN THE CHARTS is (latest departure built into the
@@ -158,46 +172,108 @@ avg_delay = (fdf["avg_delay_minutes"] * fdf["num_departures"]).sum() / total_dep
 late = int(fdf["num_late_over_5min"].sum())
 late_pct = 100 * late / total_departures if total_departures else 0
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Departures", f"{total_departures:,}")
-c2.metric("Avg delay (min)", f"{avg_delay:.1f}")
-c3.metric("Late > 5 min", f"{late} ({late_pct:.0f}%)")
+on_time_pct = 100 - late_pct
+c1, c2, c3, c4 = st.columns(4)
+c1.metric(
+    "Departures", f"{total_departures:,}",
+    help="Settled departures matching the current filters.",
+    border=True,
+)
+c2.metric(
+    "Avg delay", f"{avg_delay:.1f} min",
+    help="Departure-weighted average delay. Negative = early.",
+    border=True,
+)
+c3.metric(
+    "Late > 5 min", f"{late:,}",
+    delta=f"{late_pct:.0f}% of departures", delta_color="inverse",
+    help="Departures more than 5 minutes late.",
+    border=True,
+)
+c4.metric(
+    "On time", f"{on_time_pct:.0f}%",
+    help="Share of departures within 5 minutes of schedule.",
+    border=True,
+)
+
+st.divider()
 
 # ---- Charts ----------------------------------------------------------------
+def _wavg(g: pd.DataFrame) -> float:
+    """Departure-weighted average delay for a group."""
+    return (g["avg_delay_minutes"] * g["num_departures"]).sum() / g["num_departures"].sum()
+
 st.subheader("Average delay by line → destination")
+# Horizontal bars so the long "line → destination" labels stay readable, and
+# the bar length maps to delay (red = late, green = on time / early).
 by_line = (
-    fdf.groupby("line_dir")
-    .apply(
-        lambda g: (g["avg_delay_minutes"] * g["num_departures"]).sum() / g["num_departures"].sum(),
-        include_groups=False,
-    )
-    .sort_values(ascending=False)
-    .rename("avg_delay_minutes")
+    fdf.groupby("line_dir").apply(_wavg, include_groups=False)
+    .rename("avg_delay_minutes").reset_index()
 )
-st.bar_chart(by_line)
+line_chart = (
+    alt.Chart(by_line)
+    .mark_bar(cornerRadiusEnd=3)
+    .encode(
+        x=alt.X("avg_delay_minutes:Q", title="avg delay (min)"),
+        y=alt.Y("line_dir:N", sort="-x", title=None),
+        color=_delay_color,
+        tooltip=[
+            alt.Tooltip("line_dir:N", title="Line"),
+            alt.Tooltip("avg_delay_minutes:Q", title="Avg delay (min)", format=".1f"),
+        ],
+    )
+    .properties(height=max(140, 30 * len(by_line)))
+)
+st.altair_chart(line_chart, use_container_width=True)
 
-st.subheader("Average delay by daypart")
-by_daypart = (
-    fdf.groupby("daypart")
-    .apply(
-        lambda g: (g["avg_delay_minutes"] * g["num_departures"]).sum() / g["num_departures"].sum(),
-        include_groups=False,
-    )
-    .rename("avg_delay_minutes")
-    .reindex([d for d in DAYPART_ORDER if d in fdf["daypart"].unique()])
-)
-st.bar_chart(by_daypart)
+col_a, col_b = st.columns(2)
 
-st.subheader("Average delay over time (by hour)")
-by_hour = (
-    fdf.groupby("planned_hour")
-    .apply(
-        lambda g: (g["avg_delay_minutes"] * g["num_departures"]).sum() / g["num_departures"].sum(),
-        include_groups=False,
+with col_a:
+    st.subheader("By daypart")
+    present_dayparts = [d for d in DAYPART_ORDER if d in fdf["daypart"].unique()]
+    by_daypart = (
+        fdf.groupby("daypart").apply(_wavg, include_groups=False)
+        .rename("avg_delay_minutes").reset_index()
     )
-    .rename("avg_delay_minutes")
-)
-st.line_chart(by_hour)
+    daypart_chart = (
+        alt.Chart(by_daypart)
+        .mark_bar(cornerRadiusEnd=3)
+        .encode(
+            x=alt.X("daypart:N", sort=present_dayparts, title=None),
+            y=alt.Y("avg_delay_minutes:Q", title="avg delay (min)"),
+            color=_delay_color,
+            tooltip=[
+                alt.Tooltip("daypart:N", title="Daypart"),
+                alt.Tooltip("avg_delay_minutes:Q", title="Avg delay (min)", format=".1f"),
+            ],
+        )
+        .properties(height=CHART_HEIGHT)
+    )
+    st.altair_chart(daypart_chart, use_container_width=True)
+
+with col_b:
+    st.subheader("By hour of day")
+    by_hour = (
+        fdf.groupby("planned_hour").apply(_wavg, include_groups=False)
+        .rename("avg_delay_minutes").reset_index()
+    )
+    zero_rule = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
+        color="#5b6472", strokeDash=[4, 4]
+    ).encode(y="y:Q")
+    hour_line = (
+        alt.Chart(by_hour)
+        .mark_line(point=True, color=COLOR_ACCENT)
+        .encode(
+            x=alt.X("planned_hour:T", title=None),
+            y=alt.Y("avg_delay_minutes:Q", title="avg delay (min)"),
+            tooltip=[
+                alt.Tooltip("planned_hour:T", title="Hour", format="%Y-%m-%d %H:%M"),
+                alt.Tooltip("avg_delay_minutes:Q", title="Avg delay (min)", format=".1f"),
+            ],
+        )
+        .properties(height=CHART_HEIGHT)
+    )
+    st.altair_chart(zero_rule + hour_line, use_container_width=True)
 
 # ---- Fine-grained time series (5-min buckets) -----------------------------
 st.header("Fine-grained trends (5-min buckets)")

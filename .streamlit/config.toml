@@ -1,0 +1,9 @@
+# Project-local Streamlit theme. Read when running from the repo root.
+# Kept minimal on purpose - just a coherent palette + font, no custom CSS.
+[theme]
+base = "dark"
+primaryColor = "#4d8bff"          # transit blue (accents, selections)
+backgroundColor = "#0e1117"       # main dark background
+secondaryBackgroundColor = "#1b2130"  # panels / sidebar / metric cards
+textColor = "#e6ebf2"
+font = "sans serif"
