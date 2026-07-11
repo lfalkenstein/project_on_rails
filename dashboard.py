@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import altair as alt
 import duckdb
 import pandas as pd
 import streamlit as st
@@ -48,6 +49,20 @@ def load_fct() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
+def load_shown_freshness() -> pd.Timestamp | None:
+    """Latest departure time represented in the marts the dashboard renders.
+
+    This reflects what the CHARTS actually show (built by dbt), not when the raw
+    ingest last ran - so it won't claim a freshness the visualised data doesn't
+    have. The marts only include *settled* departures, so this figure naturally
+    trails "now" by the settle delay, which is honest rather than a bug.
+    """
+    with duckdb.connect(str(DB_PATH), read_only=True) as con:
+        row = con.sql("select max(bucket_5min) from main.fct_departures_5min").fetchone()
+    return pd.Timestamp(row[0]) if row and row[0] is not None else None
+
+
+@st.cache_data(ttl=60)
 def load_5min() -> pd.DataFrame:
     """Load the 5-minute time-series mart (read-only, cached 60s)."""
     with duckdb.connect(str(DB_PATH), read_only=True) as con:
@@ -70,6 +85,24 @@ def load_5min() -> pd.DataFrame:
 
 
 st.title("🚆 project_on_rails — delays by line")
+
+# ---- Freshness watermark ---------------------------------------------------
+# Show how current the DATA IN THE CHARTS is (latest departure built into the
+# marts), not when raw ingest last ran - the two differ because dbt is rebuilt
+# manually. Data is cached for 60s; it also refreshes via Streamlit's built-in
+# "Clear cache" / "Rerun" menu (top-right).
+try:
+    _fresh = load_shown_freshness()
+except duckdb.IOException:
+    _fresh = None
+_rendered = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+if _fresh is not None:
+    st.caption(
+        f"🟢 Data shown up to **{_fresh:%Y-%m-%d %H:%M}** (latest settled departure) "
+        f"· page rendered {_rendered}"
+    )
+else:
+    st.caption(f"Page rendered {_rendered} · data freshness unavailable")
 
 if not DB_PATH.exists():
     st.error(f"No warehouse found at {DB_PATH}. Run an ingest + `dbt run` first.")
@@ -169,6 +202,23 @@ st.line_chart(by_hour)
 # ---- Fine-grained time series (5-min buckets) -----------------------------
 st.header("Fine-grained trends (5-min buckets)")
 
+# At 5-min resolution the full history gets crowded, so default to a recent
+# window. Anchored to the LATEST bucket present (not wall-clock now), because
+# the marts only hold settled departures and therefore trail the present - an
+# "up to now" window would otherwise cut off the most recent data.
+WINDOW_OPTIONS = {
+    "Last 1 hour": 1,
+    "Last 3 hours": 3,
+    "Last 6 hours": 6,
+    "Last 12 hours": 12,
+    "Last 24 hours": 24,
+    "All": None,
+}
+window_label = st.selectbox(
+    "Time window", list(WINDOW_OPTIONS), index=2, key="fine_window"  # default: last 6 hours
+)
+window_hours = WINDOW_OPTIONS[window_label]
+
 try:
     fine = load_5min()
 except duckdb.IOException:
@@ -188,10 +238,38 @@ else:
     fine = fine.copy()
     fine["bucket_5min"] = pd.to_datetime(fine["bucket_5min"])
 
-    # ---- Volume: one bar per 5-min bucket (plain count) ----
+    # Trim to the selected rolling window, anchored to the latest bucket we have.
+    if window_hours is not None:
+        latest = fine["bucket_5min"].max()
+        cutoff = latest - pd.Timedelta(hours=window_hours)
+        fine = fine[fine["bucket_5min"] >= cutoff]
+        st.caption(
+            f"Showing {cutoff:%Y-%m-%d %H:%M} – {latest:%H:%M} "
+            f"({window_label.lower()} of available data)"
+        )
+
+    # ---- Volume: one stacked bar per 5-min bucket, split by line ----
+    # Stacked by line_dir so each bucket shows its per-line composition, and the
+    # Altair tooltip surfaces the exact line + count for the hovered segment.
     st.subheader("Departure volume (5-min buckets)")
-    vol5 = fine.groupby("bucket_5min")["num_departures"].sum().sort_index()
-    st.bar_chart(vol5)
+    vol_by_line = (
+        fine.groupby(["bucket_5min", "line_dir"], as_index=False)["num_departures"].sum()
+    )
+    vol_chart = (
+        alt.Chart(vol_by_line)
+        .mark_bar()
+        .encode(
+            x=alt.X("bucket_5min:T", title="5-min bucket"),
+            y=alt.Y("sum(num_departures):Q", title="departures", stack=True),
+            color=alt.Color("line_dir:N", title="Line → destination"),
+            tooltip=[
+                alt.Tooltip("bucket_5min:T", title="Bucket", format="%Y-%m-%d %H:%M"),
+                alt.Tooltip("line_dir:N", title="Line"),
+                alt.Tooltip("num_departures:Q", title="Departures"),
+            ],
+        )
+    )
+    st.altair_chart(vol_chart, use_container_width=True)
 
     # ---- Delay trend: noisy per-bucket delay smoothed by a rolling average ----
     # Per-5-min delay is very noisy (few departures per bucket), so we smooth it
