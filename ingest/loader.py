@@ -12,16 +12,45 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import logging
+import time
 from typing import Any
 
 import duckdb
 
 from ingest.config import settings
 
+log = logging.getLogger(__name__)
+
+# DuckDB is single-writer: opening the file read-write fails while another
+# process holds it (a dbt run, a dashboard read, DBeaver...). That contention is
+# brief, so we retry with a short exponential backoff instead of dropping the
+# batch. Total wait ~15s (0.5+1+2+4+8), which stays well under the 5-min poll
+# cadence so a busy moment can't stall the schedule.
+CONNECT_RETRIES = 5
+CONNECT_BACKOFF = 0.5
+
 
 def _connect() -> duckdb.DuckDBPyConnection:
     settings.duckdb_path.parent.mkdir(parents=True, exist_ok=True)
-    return duckdb.connect(str(settings.duckdb_path))
+    last_exc: duckdb.IOException | None = None
+    for attempt in range(CONNECT_RETRIES + 1):
+        try:
+            return duckdb.connect(str(settings.duckdb_path))
+        except duckdb.IOException as exc:
+            # Almost always transient lock contention; retry briefly. A genuine
+            # IO problem (missing path, disk full) will still raise after the
+            # attempts are exhausted.
+            last_exc = exc
+            if attempt < CONNECT_RETRIES:
+                wait = CONNECT_BACKOFF * (2 ** attempt)
+                log.warning(
+                    "warehouse busy (attempt %d/%d): %s - retrying in %.1fs",
+                    attempt + 1, CONNECT_RETRIES, exc, wait,
+                )
+                time.sleep(wait)
+    assert last_exc is not None
+    raise last_exc
 
 
 def _ensure_schema(con: duckdb.DuckDBPyConnection) -> None:
