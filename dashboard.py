@@ -95,6 +95,33 @@ def load_5min() -> pd.DataFrame:
         ).df()
 
 
+@st.cache_data(ttl=60)
+def load_stop_punctuality() -> pd.DataFrame:
+    """Per-stop rush-weighted punctuality score (regular service only)."""
+    with duckdb.connect(str(DB_PATH), read_only=True) as con:
+        return con.sql(
+            """
+            select station_name, num_departures, num_ontime,
+                   ontime_pct, punctuality_score, dayparts_covered
+            from main.fct_stop_punctuality
+            order by punctuality_score desc
+            """
+        ).df()
+
+
+@st.cache_data(ttl=60)
+def load_service() -> pd.DataFrame:
+    """Line→destination service classification per stop (regular/transient/deadhead)."""
+    with duckdb.connect(str(DB_PATH), read_only=True) as con:
+        return con.sql(
+            """
+            select station_name, line_dir, line_name, direction, num_departures,
+                   dest_share, service_class, is_regular_service, confidence
+            from main.dim_stop_line_service
+            """
+        ).df()
+
+
 st.title("🚆 project_on_rails")
 st.markdown(
     "#### Public-transport punctuality — delays by line & direction"
@@ -141,6 +168,32 @@ if df.empty:
 
 # ---- Sidebar filters -------------------------------------------------------
 st.sidebar.header("Filters")
+
+# Noise filter: drop non-revenue depot runs and rare/transient short-turns
+# (destinations below 10% of their line at the stop). On by default so the
+# views reflect everyday service. Filtering df here means the line list, KPIs
+# and charts all inherit it automatically.
+hide_transient = st.sidebar.toggle(
+    "Hide depot/transient runs",
+    value=True,
+    help="Hide non-revenue depot (Betriebshof) runs and rare short-turns — "
+         "destinations below 10% of their line's departures at that stop.",
+)
+
+try:
+    service = load_service()
+except duckdb.IOException:
+    service = pd.DataFrame()
+
+if hide_transient and not service.empty:
+    regular_keys = set(
+        zip(
+            service.loc[service["is_regular_service"], "station_name"],
+            service.loc[service["is_regular_service"], "line_dir"],
+        )
+    )
+    df = df[[(s, l) in regular_keys for s, l in zip(df["station_name"], df["line_dir"])]]
+
 stations = sorted(df["station_name"].dropna().unique())
 sel_stations = st.sidebar.multiselect("Station", stations, default=stations)
 
@@ -195,6 +248,52 @@ c4.metric(
     help="Share of departures within 5 minutes of schedule.",
     border=True,
 )
+
+st.divider()
+
+# ---- Stop punctuality ranking ---------------------------------------------
+st.subheader("🏆 Stop punctuality ranking")
+st.caption(
+    "Rush-weighted on-time score (on time = within 3 min of schedule). "
+    "Regular revenue service only — depot & transient runs excluded."
+)
+try:
+    rank = load_stop_punctuality()
+except duckdb.IOException:
+    rank = pd.DataFrame()
+
+rank = rank[rank["station_name"].isin(sel_stations)] if not rank.empty else rank
+if rank.empty:
+    st.info("No punctuality scores yet (need settled regular-service departures).")
+else:
+    rank_chart = (
+        alt.Chart(rank)
+        .mark_bar(cornerRadiusEnd=3)
+        .encode(
+            x=alt.X(
+                "punctuality_score:Q",
+                title="punctuality score",
+                scale=alt.Scale(domain=[0, 100]),
+            ),
+            y=alt.Y("station_name:N", sort="-x", title=None,
+                    axis=alt.Axis(labelLimit=320)),
+            # spread colour over the realistic 70-100 range where scores cluster
+            color=alt.Color(
+                "punctuality_score:Q",
+                scale=alt.Scale(scheme="redyellowgreen", domain=[70, 100]),
+                legend=None,
+            ),
+            tooltip=[
+                alt.Tooltip("station_name:N", title="Stop"),
+                alt.Tooltip("punctuality_score:Q", title="Score (rush-weighted)", format=".1f"),
+                alt.Tooltip("ontime_pct:Q", title="On-time % (plain)", format=".1f"),
+                alt.Tooltip("num_departures:Q", title="Departures (n)", format=","),
+                alt.Tooltip("dayparts_covered:Q", title="Dayparts covered"),
+            ],
+        )
+        .properties(height=max(140, 44 * len(rank)))
+    )
+    st.altair_chart(rank_chart, use_container_width=True)
 
 st.divider()
 
